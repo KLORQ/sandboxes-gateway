@@ -15,7 +15,25 @@ type Rule struct {
 	Action   Action
 	Protocol string
 	Domain   string
+	CIDR     string
 	Port     uint16
+}
+
+// Port maps a host loopback port to a guest port.
+type Port struct {
+	Host  uint16
+	Guest uint16
+	Proto string
+}
+
+// Policy is the effective sandbox policy.
+type Policy struct {
+	Revision  int
+	SandboxID string
+	AuditPath string
+	Allow     []Rule
+	Deny      []Rule
+	Ports     []Port
 }
 
 // Decision is the result of policy evaluation.
