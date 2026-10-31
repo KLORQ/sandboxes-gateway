@@ -7,6 +7,10 @@ IPv4 TCP/UDP CIDR rules and rejects domain rules it cannot enforce. DNS hostname
 policy, HTTP, CONNECT, TLS inspection, IPv6 and QUIC enforcement are not yet
 implemented or verified. Audit failure behavior has not been fully validated.
 
+The `registryauth` package provides host-side parsing, scoped token exchange,
+and restricted transport primitives. These primitives do not authenticate a
+sandbox, enforce guest egress, or enable guest registry pulls on their own.
+
 ## Boundaries
 
 - separate process from the daemon;
