@@ -46,8 +46,5 @@ type Decision struct {
 
 // Evaluate fails closed until a policy engine is configured.
 func Evaluate(rule Rule) Decision {
-	if rule.Action != Allow {
-		return Decision{Allow: false, RuleID: rule.ID, Reason: "default deny"}
-	}
-	return Decision{Allow: true, RuleID: rule.ID, Reason: "allow rule"}
+	return Decision{Allow: false, RuleID: rule.ID, Reason: "policy engine unavailable"}
 }
