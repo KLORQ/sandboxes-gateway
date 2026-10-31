@@ -2,8 +2,13 @@
 
 Status: pre-alpha.
 
-Host network policy gateway. Enforces egress policy for TCP, UDP, DNS, HTTP,
-CONNECT, and TLS; fails closed when policy or audit is unavailable.
+The `registryauth` package provides host-side parsing, scoped token exchange,
+and restricted transport primitives. These primitives do not authenticate a
+sandbox, enforce guest egress, or enable guest registry pulls on their own.
+
+The experimental gateway does not yet establish enforcement for DNS hostname
+policy, HTTP, CONNECT, TLS inspection, IPv6 or QUIC. Audit failure behavior is
+not fully validated.
 
 ## Boundaries
 
