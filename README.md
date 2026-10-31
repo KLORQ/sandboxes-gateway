@@ -2,13 +2,14 @@
 
 Status: pre-alpha.
 
+Host network policy gateway. The current experimental gvproxy integration supports
+IPv4 TCP/UDP CIDR rules and rejects domain rules it cannot enforce. DNS hostname
+policy, HTTP, CONNECT, TLS inspection, IPv6 and QUIC enforcement are not yet
+implemented or verified. Audit failure behavior has not been fully validated.
+
 The `registryauth` package provides host-side parsing, scoped token exchange,
 and restricted transport primitives. These primitives do not authenticate a
 sandbox, enforce guest egress, or enable guest registry pulls on their own.
-
-The experimental gateway does not yet establish enforcement for DNS hostname
-policy, HTTP, CONNECT, TLS inspection, IPv6 or QUIC. Audit failure behavior is
-not fully validated.
 
 ## Boundaries
 
@@ -25,9 +26,15 @@ not fully validated.
 - dedicated Unixgram socket;
 - default-deny egress policy;
 - audit log path;
-- revisioned policy reload via `SIGHUP`;
+- policy reload rewrites the config, sends SIGHUP, and verifies the patched gvproxy's appended `egress policy reloaded revision=N` log acknowledgement; a missing acknowledgement stops the gateway and fails closed;
 - TCP port forwards;
 - deterministic MAC and nerdbox network annotations.
 
+The manager requires a supervisor executable and a patched gvproxy supporting
+the owner-lease flag. Without either component gateway startup fails closed.
+The matching daemon entry point and gvproxy build patch must be deployed
+together; this module alone does not supply a runnable supervisor binary.
+
 Current tests cover config rendering, MAC derivation, validation, and safe stop.
-Live gvproxy startup is not part of CI yet; it requires the pinned patched binary.
+An opt-in local test starts and stops a supplied patched gvproxy; it does not
+test a VM or establish policy enforcement. It is not part of CI.

@@ -3,8 +3,10 @@ package policy
 import "testing"
 
 func TestDefaultDeny(t *testing.T) {
-	got := Evaluate(Rule{ID: "empty"})
-	if got.Allow {
-		t.Fatal("empty policy must deny")
+	for _, action := range []Action{"", Allow, Deny} {
+		got := Evaluate(Rule{ID: "fixture", Action: action})
+		if got.Allow {
+			t.Fatalf("unconfigured engine allowed action %q", action)
+		}
 	}
 }
