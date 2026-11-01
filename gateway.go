@@ -475,27 +475,59 @@ func openManagedFile(path string, flags int) (*os.File, error) {
 // validatePolicy rejects rule forms the configured gvproxy policy engine
 // cannot enforce. Domain matching is currently unsupported by that engine.
 func validatePolicy(p policy.Policy) error {
-	for _, group := range []struct {
-		name  string
-		rules []policy.Rule
-	}{{name: "allow", rules: p.Allow}, {name: "deny", rules: p.Deny}} {
-		for i, rule := range group.rules {
-			if rule.Domain != "" {
-				return fmt.Errorf("%s rule %d: domain policies are unsupported by the configured gateway", group.name, i)
-			}
-			if rule.CIDR == "" {
-				return fmt.Errorf("%s rule %d: cidr is required", group.name, i)
-			}
-			if _, _, err := net.ParseCIDR(rule.CIDR); err != nil {
-				return fmt.Errorf("%s rule %d: invalid cidr %q: %w", group.name, i, rule.CIDR, err)
-			}
-			protocol := strings.ToLower(strings.TrimSpace(rule.Protocol))
-			if protocol != protocolTCP && protocol != protocolUDP {
-				return fmt.Errorf("%s rule %d: protocol must be tcp or udp", group.name, i)
-			}
+	if err := validatePolicyRules(p.Allow, "allow"); err != nil {
+		return err
+	}
+	if err := validatePolicyRules(p.Deny, "deny"); err != nil {
+		return err
+	}
+	return validatePolicyPorts(p.Ports)
+}
+
+func validatePolicyRules(rules []policy.Rule, name string) error {
+	for i, rule := range rules {
+		if rule.Domain != "" {
+			return fmt.Errorf("%s rule %d: domain policies are unsupported by the configured gateway", name, i)
+		}
+		if rule.CIDR == "" {
+			return fmt.Errorf("%s rule %d: cidr is required", name, i)
+		}
+		if _, _, err := net.ParseCIDR(rule.CIDR); err != nil {
+			return fmt.Errorf("%s rule %d: invalid cidr %q: %w", name, i, rule.CIDR, err)
+		}
+		protocol := strings.ToLower(strings.TrimSpace(rule.Protocol))
+		if protocol != protocolTCP && protocol != protocolUDP {
+			return fmt.Errorf("%s rule %d: protocol must be tcp or udp", name, i)
 		}
 	}
 	return nil
+}
+
+func validatePolicyPorts(ports []policy.Port) error {
+	for i, port := range ports {
+		if port.Host == 0 || port.Guest == 0 {
+			return fmt.Errorf("port %d: host and guest ports must be non-zero", i)
+		}
+		if portProto(port) != protocolTCP && portProto(port) != protocolUDP {
+			return fmt.Errorf("port %d: protocol must be tcp or udp", i)
+		}
+		if port.HostIP == "" {
+			continue
+		}
+		ip := net.ParseIP(port.HostIP)
+		if ip == nil || !ip.IsLoopback() {
+			return fmt.Errorf("port %d: host IP must be loopback", i)
+		}
+	}
+	return nil
+}
+
+func portProto(port policy.Port) string {
+	protocol := strings.ToLower(strings.TrimSpace(port.Proto))
+	if protocol == "" {
+		return protocolTCP
+	}
+	return protocol
 }
 
 func renderConfig(p policy.Policy, dnsUpstream string) string {
@@ -514,11 +546,9 @@ func renderConfig(p policy.Policy, dnsUpstream string) string {
 	if len(p.Ports) > 0 {
 		b.WriteString("  forwards:\n")
 		for _, port := range p.Ports {
-			local := fmt.Sprintf("127.0.0.1:%d", port.Host)
-			if port.Proto == "udp" {
+			local := portLocal(port)
+			if portProto(port) == protocolUDP {
 				local = "udp:" + local
-			} else if port.Proto != "" && port.Proto != protocolTCP {
-				continue
 			}
 			fmt.Fprintf(&b, "    %s: %s\n",
 				strconv.Quote(local),
@@ -608,18 +638,23 @@ func waitServicesAPI(ctx context.Context, proc process) error {
 func desiredForwards(ports []policy.Port) map[string]forwardAPI {
 	desired := make(map[string]forwardAPI, len(ports))
 	for _, port := range ports {
-		protocol := port.Proto
-		if protocol == "" {
-			protocol = protocolTCP
-		}
+		protocol := portProto(port)
 		if protocol != protocolTCP && protocol != protocolUDP {
 			continue
 		}
-		local := fmt.Sprintf("127.0.0.1:%d", port.Host)
+		local := portLocal(port)
 		key := protocol + "|" + local
 		desired[key] = forwardAPI{Local: local, Remote: fmt.Sprintf("%s:%d", guestIP, port.Guest), Protocol: protocol}
 	}
 	return desired
+}
+
+func portLocal(port policy.Port) string {
+	hostIP := port.HostIP
+	if hostIP == "" {
+		hostIP = "127.0.0.1"
+	}
+	return net.JoinHostPort(hostIP, strconv.Itoa(int(port.Host)))
 }
 
 func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, desired map[string]forwardAPI) error {

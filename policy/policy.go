@@ -19,11 +19,12 @@ type Rule struct {
 	Port     uint16
 }
 
-// Port maps a host loopback port to a guest port.
+// Port maps a host loopback address/port to a guest port.
 type Port struct {
-	Host  uint16
-	Guest uint16
-	Proto string
+	Host   uint16
+	Guest  uint16
+	Proto  string
+	HostIP string
 }
 
 // Policy is the effective sandbox policy.
