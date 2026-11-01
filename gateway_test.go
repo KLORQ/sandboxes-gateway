@@ -17,6 +17,7 @@ func TestRenderConfig(t *testing.T) {
 		SandboxID: "dev",
 		AuditPath: "/tmp/dev.audit.jsonl",
 		Allow: []policy.Rule{
+			{ID: "rul_allow_cidr", Protocol: "tcp", Domain: "api.example.test", Port: 443},
 			{Protocol: "tcp", CIDR: "10.0.0.0/8", Port: 443},
 		},
 		Deny: []policy.Rule{
@@ -31,6 +32,8 @@ func TestRenderConfig(t *testing.T) {
 		`auditLog: "/tmp/dev.audit.jsonl"`,
 		"    allow:",
 		`cidr: "10.0.0.0/8"`,
+		`id: "rul_allow_cidr"`,
+		`domain: "api.example.test"`,
 		"    deny:",
 		`protocol: "udp"`,
 		`"127.0.0.1:8080": "192.168.127.3:3000"`,
@@ -148,6 +151,7 @@ func TestValidatePolicyFailsClosedForUnsupportedRules(t *testing.T) {
 		{name: "invalid cidr", rule: policy.Rule{Protocol: "tcp", CIDR: "registry.example", Port: 443}},
 		{name: "invalid protocol", rule: policy.Rule{Protocol: "icmp", CIDR: "192.0.2.1/32"}},
 		{name: "unsupported UDP domain", rule: policy.Rule{Protocol: "udp", Domain: "api.example.test"}},
+		{name: "ip literal as domain", rule: policy.Rule{Protocol: "tcp", Domain: "192.0.2.10", Port: 443}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
