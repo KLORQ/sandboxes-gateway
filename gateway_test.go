@@ -2,7 +2,10 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -279,5 +282,144 @@ func TestStartRejectsUnsafeSandboxID(t *testing.T) {
 		if !validSandboxID(id) {
 			t.Fatalf("valid sandbox ID %q rejected", id)
 		}
+	}
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "gwtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func TestStopUntrackedRemovesOwnSockets(t *testing.T) {
+	dir := shortTempDir(t)
+	m, err := New(Config{GVProxy: "/bin/true", RunDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "dev.sock")
+	apiSocket := filepath.Join(dir, "dev.api.sock")
+	for _, path := range []string{socket, apiSocket} {
+		conn, err := net.ListenPacket("unixgram", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{socket, apiSocket} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s still exists: %v", path, err)
+		}
+	}
+}
+
+func TestStopUntrackedLeavesForeignSocket(t *testing.T) {
+	runDir := shortTempDir(t)
+	foreignDir := shortTempDir(t)
+	foreign := filepath.Join(foreignDir, "dev.sock")
+	conn, err := net.ListenPacket("unixgram", foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(Config{GVProxy: "/bin/true", RunDir: runDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(foreign); err != nil {
+		t.Fatalf("foreign socket changed: %v", err)
+	}
+}
+
+func TestWatchReportsUnexpectedExitAndCleansSockets(t *testing.T) {
+	dir := shortTempDir(t)
+	exited := make(chan string, 1)
+	m, err := New(Config{GVProxy: "/bin/true", RunDir: dir, OnExit: func(name string) { exited <- name }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "exit 0") // #nosec G204 -- fixed test command
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	socket := filepath.Join(dir, "dev.sock")
+	apiSocket := filepath.Join(dir, "dev.api.sock")
+	for _, path := range []string{socket, apiSocket} {
+		conn, err := net.ListenPacket("unixgram", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proc := process{cmd: cmd, socket: socket, apiSocket: apiSocket, done: done}
+	m.mu.Lock()
+	m.procs["dev"] = proc
+	m.mu.Unlock()
+	m.watch("dev", proc, done)
+	select {
+	case name := <-exited:
+		if name != "dev" {
+			t.Fatalf("OnExit name = %q", name)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unexpected gateway exit was not reported")
+	}
+	m.mu.Lock()
+	_, tracked := m.procs["dev"]
+	m.mu.Unlock()
+	if tracked {
+		t.Fatal("exited gateway is still tracked")
+	}
+	if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gateway socket was not cleaned: %v", err)
+	}
+}
+
+func TestWatchIgnoresOrderlyStop(t *testing.T) {
+	dir := shortTempDir(t)
+	exited := make(chan string, 1)
+	m, err := New(Config{GVProxy: "/bin/true", RunDir: dir, OnExit: func(name string) { exited <- name }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "exit 0") // #nosec G204 -- fixed test command
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	proc := process{cmd: cmd, socket: filepath.Join(dir, "dev.sock"), done: done, stopping: true}
+	m.mu.Lock()
+	m.procs["dev"] = proc
+	m.mu.Unlock()
+	m.watch("dev", proc, done)
+	select {
+	case name := <-exited:
+		t.Fatalf("orderly stop reported as loss: %s", name)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
