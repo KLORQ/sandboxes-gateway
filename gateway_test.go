@@ -140,7 +140,8 @@ func TestValidatePolicyFailsClosedForUnsupportedRules(t *testing.T) {
 		name string
 		rule policy.Rule
 	}{
-		{name: "domain", rule: policy.Rule{Protocol: "tcp", Domain: "registry.example", Port: 443}},
+		{name: "domain and cidr", rule: policy.Rule{Protocol: "tcp", Domain: "registry.example", CIDR: "192.0.2.0/24", Port: 443}},
+		{name: "invalid domain", rule: policy.Rule{Protocol: "tcp", Domain: "*", Port: 443}},
 		{name: "missing cidr", rule: policy.Rule{Protocol: "tcp", Port: 443}},
 		{name: "invalid cidr", rule: policy.Rule{Protocol: "tcp", CIDR: "registry.example", Port: 443}},
 		{name: "invalid protocol", rule: policy.Rule{Protocol: "icmp", CIDR: "192.0.2.1/32"}},
@@ -151,6 +152,23 @@ func TestValidatePolicyFailsClosedForUnsupportedRules(t *testing.T) {
 				t.Fatal("unsupported policy must be rejected")
 			}
 		})
+	}
+}
+
+func TestDomainPolicyRenderAndUpstreamRequirement(t *testing.T) {
+	cfg := renderConfig(policy.Policy{
+		Revision: 4, SandboxID: "domains",
+		Allow: []policy.Rule{{Protocol: "tcp", Domain: "*.example.com", Port: 443}},
+	}, "1.1.1.1:53")
+	if !strings.Contains(cfg, `domain: "*.example.com"`) {
+		t.Fatalf("domain missing:\n%s", cfg)
+	}
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	if err := writeConfig(path, policy.Policy{SandboxID: "domains", Allow: []policy.Rule{{Protocol: "tcp", Domain: "example.com"}}}, ""); err == nil {
+		t.Fatal("domain policy without DNS upstream was accepted")
+	}
+	if err := writeConfig(path, policy.Policy{SandboxID: "domains", Allow: []policy.Rule{{Protocol: "tcp", Domain: "example.com"}}}, "1.1.1.1:53"); err != nil {
+		t.Fatal(err)
 	}
 }
 
