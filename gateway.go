@@ -529,35 +529,45 @@ func validateDomainUpstream(p policy.Policy, dnsUpstream string) error {
 	return nil
 }
 
-//nolint:gocyclo,cyclop // a compact domain grammar validator.
 func validDomainRule(pattern string) bool {
 	pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
-	if pattern == "" || len(pattern) > 253 || strings.ContainsAny(pattern, "\\ ") {
+	if !validDomainHead(pattern) {
 		return false
 	}
-	base := pattern
-	switch {
-	case strings.HasPrefix(base, "**."):
-		base = strings.TrimPrefix(base, "**.")
-	case strings.HasPrefix(base, "*."):
-		base = strings.TrimPrefix(base, "*.")
-	}
+	base := strings.TrimPrefix(strings.TrimPrefix(pattern, "**."), "*.")
 	if base == "" || strings.Contains(base, "*") {
 		return false
 	}
 	for _, label := range strings.Split(base, ".") {
-		if label == "" || len(label) > 63 {
+		if !validDomainLabel(label) {
 			return false
 		}
-		if _, err := pathpkg.Match(strings.ReplaceAll(label, "[!", "[^"), "example"); err != nil {
-			return false
+	}
+	return true
+}
+
+// validDomainHead rejects empty, oversized, whitespace, glob-star and IP
+// literal patterns. A domain rule matches TLS hostnames; an IP literal never
+// can, so accepting one would create a rule that silently matches nothing.
+func validDomainHead(pattern string) bool {
+	if pattern == "" || len(pattern) > 253 || strings.ContainsAny(pattern, "\\ ") {
+		return false
+	}
+	return net.ParseIP(pattern) == nil
+}
+
+func validDomainLabel(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	if _, err := pathpkg.Match(strings.ReplaceAll(label, "[!", "[^"), "example"); err != nil {
+		return false
+	}
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '?' || r == '[' || r == ']' || r == '!' {
+			continue
 		}
-		for _, r := range label {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '?' || r == '[' || r == ']' || r == '!' {
-				continue
-			}
-			return false
-		}
+		return false
 	}
 	return true
 }
@@ -634,6 +644,9 @@ func writeRules(b *strings.Builder, name string, rules []policy.Rule) {
 			proto = "tcp"
 		}
 		fmt.Fprintf(b, "      - protocol: %s\n", strconv.Quote(proto))
+		if r.ID != "" {
+			fmt.Fprintf(b, "        id: %s\n", strconv.Quote(r.ID))
+		}
 		if r.CIDR != "" {
 			fmt.Fprintf(b, "        cidr: %s\n", strconv.Quote(r.CIDR))
 		}

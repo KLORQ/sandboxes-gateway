@@ -96,8 +96,8 @@ func Check(allow, deny []Rule, req Request) Decision {
 func ValidateEnforcement(allow, deny []Rule) error {
 	for _, rules := range [][]Rule{allow, deny} {
 		for _, rule := range rules {
-			if rule.Domain != "" && strings.EqualFold(strings.TrimSpace(rule.Protocol), "udp") {
-				return errors.New("UDP domain policy is unsupported")
+			if err := validateEnforcementRule(rule); err != nil {
+				return err
 			}
 		}
 	}
@@ -106,13 +106,31 @@ func ValidateEnforcement(allow, deny []Rule) error {
 			continue
 		}
 		for _, granted := range allow {
-			if granted.CIDR != "" && normalizedProtocol(granted.Protocol) == normalizedProtocol(denied.Protocol) &&
-				(granted.Port == 0 || denied.Port == 0 || granted.Port == denied.Port) {
+			if domainDenyConflictsWithIPAllow(denied, granted) {
 				return errors.New("domain deny conflicts with direct IP allow; enforcement unsupported")
 			}
 		}
 	}
 	return nil
+}
+
+func validateEnforcementRule(rule Rule) error {
+	if rule.Domain == "" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(rule.Protocol), "udp") {
+		return errors.New("UDP domain policy is unsupported")
+	}
+	if net.ParseIP(strings.TrimSpace(rule.Domain)) != nil {
+		return errors.New("domain rule must not be an IP literal; use a CIDR rule")
+	}
+	return nil
+}
+
+func domainDenyConflictsWithIPAllow(denied, granted Rule) bool {
+	return granted.CIDR != "" &&
+		normalizedProtocol(granted.Protocol) == normalizedProtocol(denied.Protocol) &&
+		(granted.Port == 0 || denied.Port == 0 || granted.Port == denied.Port)
 }
 
 func normalizedProtocol(protocol string) string {
