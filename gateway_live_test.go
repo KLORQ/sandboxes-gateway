@@ -114,6 +114,42 @@ func TestLiveGatewayLifecycle(t *testing.T) {
 	}
 }
 
+func TestLiveGatewayDomainReload(t *testing.T) {
+	binary, supervisor := os.Getenv("KLORQ_TEST_GVPROXY"), os.Getenv("KLORQ_TEST_SUPERVISOR")
+	if binary == "" || supervisor == "" {
+		t.Skip("requires patched gvproxy and gateway supervisor")
+	}
+	dir, err := os.MkdirTemp("/tmp", "ksbx-gwd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("cleanup owned gateway directory: %v", err)
+		}
+	})
+	manager, err := New(Config{GVProxy: binary, Supervisor: supervisor, RunDir: dir, DNSUpstream: "127.0.0.1:9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	p := policy.Policy{SandboxID: "domain-fixture", Revision: 1, Allow: []policy.Rule{{Protocol: "tcp", Domain: "api?.example.test", Port: 443}}}
+	if _, err := manager.Start(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Stop(context.Background(), p.SandboxID); err != nil {
+			t.Errorf("stop owned gateway: %v", err)
+		}
+	})
+	p.Revision = 2
+	p.Deny = []policy.Rule{{Protocol: "tcp", Domain: "api1.example.test", Port: 443}}
+	if err := manager.Reload(ctx, p); err != nil {
+		t.Fatalf("reload domain policy: %v", err)
+	}
+}
+
 func TestLiveGatewayOwnerHelper(t *testing.T) {
 	if os.Getenv("KLORQ_TEST_OWNER_HELPER") != "1" {
 		return
