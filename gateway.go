@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -476,12 +477,15 @@ func openManagedFile(path string, flags int) (*os.File, error) {
 }
 
 // validatePolicy rejects rule forms the configured gvproxy policy engine
-// cannot enforce. Domain matching is currently unsupported by that engine.
+// cannot enforce.
 func validatePolicy(p policy.Policy) error {
 	if err := validatePolicyRules(p.Allow, "allow"); err != nil {
 		return err
 	}
 	if err := validatePolicyRules(p.Deny, "deny"); err != nil {
+		return err
+	}
+	if err := policy.ValidateEnforcement(p.Allow, p.Deny); err != nil {
 		return err
 	}
 	return validatePolicyPorts(p.Ports)
@@ -543,6 +547,9 @@ func validDomainRule(pattern string) bool {
 	}
 	for _, label := range strings.Split(base, ".") {
 		if label == "" || len(label) > 63 {
+			return false
+		}
+		if _, err := pathpkg.Match(strings.ReplaceAll(label, "[!", "[^"), "example"); err != nil {
 			return false
 		}
 		for _, r := range label {

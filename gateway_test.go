@@ -142,9 +142,12 @@ func TestValidatePolicyFailsClosedForUnsupportedRules(t *testing.T) {
 	}{
 		{name: "domain and cidr", rule: policy.Rule{Protocol: "tcp", Domain: "registry.example", CIDR: "192.0.2.0/24", Port: 443}},
 		{name: "invalid domain", rule: policy.Rule{Protocol: "tcp", Domain: "*", Port: 443}},
+		{name: "unterminated domain glob", rule: policy.Rule{Protocol: "tcp", Domain: "api[1.example.test", Port: 443}},
+		{name: "empty domain glob", rule: policy.Rule{Protocol: "tcp", Domain: "api[!].example.test", Port: 443}},
 		{name: "missing cidr", rule: policy.Rule{Protocol: "tcp", Port: 443}},
 		{name: "invalid cidr", rule: policy.Rule{Protocol: "tcp", CIDR: "registry.example", Port: 443}},
 		{name: "invalid protocol", rule: policy.Rule{Protocol: "icmp", CIDR: "192.0.2.1/32"}},
+		{name: "unsupported UDP domain", rule: policy.Rule{Protocol: "udp", Domain: "api.example.test"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -152,6 +155,20 @@ func TestValidatePolicyFailsClosedForUnsupportedRules(t *testing.T) {
 				t.Fatal("unsupported policy must be rejected")
 			}
 		})
+	}
+}
+
+func TestValidatePolicyRejectsDomainDenyOverlappingIPAllow(t *testing.T) {
+	p := policy.Policy{
+		Allow: []policy.Rule{{Protocol: "tcp", CIDR: "192.0.2.0/24", Port: 443}},
+		Deny:  []policy.Rule{{Protocol: "tcp", Domain: "blocked.example.test", Port: 443}},
+	}
+	if err := validatePolicy(p); err == nil {
+		t.Fatal("overlapping domain deny and IP allow accepted")
+	}
+	p.Allow[0].Port = 8443
+	if err := validatePolicy(p); err != nil {
+		t.Fatalf("non-overlapping positive control rejected: %v", err)
 	}
 }
 

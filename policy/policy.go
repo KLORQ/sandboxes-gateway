@@ -2,8 +2,9 @@
 package policy
 
 import (
+	"errors"
 	"net"
-	"regexp"
+	"path"
 	"strings"
 )
 
@@ -11,8 +12,9 @@ import (
 type Action string
 
 const (
-	Allow Action = "allow"
-	Deny  Action = "deny"
+	Allow       Action = "allow"
+	Deny        Action = "deny"
+	protocolTCP        = "tcp"
 )
 
 // Rule is a single policy rule.
@@ -70,9 +72,12 @@ func Evaluate(rule Rule) Decision {
 // scopes. Domain rules are matched against Request.Domain; they never authorize
 // an IP literal without a DNS binding.
 func Check(allow, deny []Rule, req Request) Decision {
+	if err := ValidateEnforcement(allow, deny); err != nil {
+		return Decision{Allow: false, Reason: err.Error()}
+	}
 	protocol := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if protocol == "" {
-		protocol = "tcp"
+		protocol = protocolTCP
 	}
 	for i := range deny {
 		if ruleMatches(deny[i], protocol, req) {
@@ -87,6 +92,37 @@ func Check(allow, deny []Rule, req Request) Decision {
 	return Decision{Allow: false, Reason: "default deny"}
 }
 
+// ValidateEnforcement rejects combinations the current gateway cannot enforce.
+func ValidateEnforcement(allow, deny []Rule) error {
+	for _, rules := range [][]Rule{allow, deny} {
+		for _, rule := range rules {
+			if rule.Domain != "" && strings.EqualFold(strings.TrimSpace(rule.Protocol), "udp") {
+				return errors.New("UDP domain policy is unsupported")
+			}
+		}
+	}
+	for _, denied := range deny {
+		if denied.Domain == "" {
+			continue
+		}
+		for _, granted := range allow {
+			if granted.CIDR != "" && normalizedProtocol(granted.Protocol) == normalizedProtocol(denied.Protocol) &&
+				(granted.Port == 0 || denied.Port == 0 || granted.Port == denied.Port) {
+				return errors.New("domain deny conflicts with direct IP allow; enforcement unsupported")
+			}
+		}
+	}
+	return nil
+}
+
+func normalizedProtocol(protocol string) string {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol == "" {
+		return protocolTCP
+	}
+	return protocol
+}
+
 func target(rule Rule) string {
 	if rule.Domain != "" {
 		return rule.Domain
@@ -97,7 +133,7 @@ func target(rule Rule) string {
 func ruleMatches(rule Rule, protocol string, req Request) bool {
 	ruleProtocol := strings.ToLower(strings.TrimSpace(rule.Protocol))
 	if ruleProtocol == "" {
-		ruleProtocol = "tcp"
+		ruleProtocol = protocolTCP
 	}
 	if ruleProtocol != protocol {
 		return false
@@ -121,12 +157,9 @@ func domainMatches(pattern, name string) bool {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
 	switch {
 	case strings.HasPrefix(pattern, "**."):
-		suffix := strings.TrimPrefix(pattern, "**.")
-		return name != suffix && strings.HasSuffix(name, "."+suffix)
+		return wildcardSuffixMatches(pattern[3:], name, false)
 	case strings.HasPrefix(pattern, "*."):
-		suffix := strings.TrimPrefix(pattern, "*.")
-		label, rest, found := strings.Cut(name, ".")
-		return found && label != "" && rest == suffix
+		return wildcardSuffixMatches(pattern[2:], name, true)
 	}
 	patternLabels := strings.Split(pattern, ".")
 	nameLabels := strings.Split(name, ".")
@@ -135,10 +168,25 @@ func domainMatches(pattern, name string) bool {
 	}
 	for i := range patternLabels {
 		glob := strings.ReplaceAll(patternLabels[i], "[!", "[^")
-		ok, err := regexp.MatchString("^"+glob+"$", nameLabels[i])
+		ok, err := path.Match(glob, nameLabels[i])
 		if err != nil || !ok {
 			return false
 		}
 	}
 	return true
+}
+
+func wildcardSuffixMatches(pattern, name string, single bool) bool {
+	suffixLabels := strings.Split(pattern, ".")
+	labels := strings.Split(name, ".")
+	extra := len(labels) - len(suffixLabels)
+	if extra < 1 || (single && extra != 1) {
+		return false
+	}
+	for _, label := range labels[:extra] {
+		if label == "" {
+			return false
+		}
+	}
+	return domainMatches(pattern, strings.Join(labels[extra:], "."))
 }

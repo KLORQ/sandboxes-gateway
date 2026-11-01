@@ -2,10 +2,16 @@
 
 Status: pre-alpha.
 
-Host network policy gateway. The current experimental gvproxy integration supports
-IPv4 TCP/UDP CIDR rules and rejects domain rules it cannot enforce. DNS hostname
-policy, HTTP, CONNECT, TLS inspection, IPv6 and QUIC enforcement are not yet
+Host network policy gateway. The experimental gvproxy integration supports
+IPv4 TCP/UDP CIDR rules and domain-only TCP rules with DNS and TLS SNI checks.
+Domain UDP rules and domain denies overlapping a direct IP allow are rejected.
+HTTP Host/method/path, CONNECT, IPv6 policy and QUIC enforcement are not yet
 implemented or verified. Audit failure behavior has not been fully validated.
+
+Policy DNS queries use the configured upstream; a hostname in that configuration
+may require host DNS for bootstrap. Use a numeric upstream address to avoid that
+lookup. `policy.Check` evaluates rules locally and does not prove that a DNS
+binding exists or that a subsequent TLS connection will pass SNI checks.
 
 The `registryauth` package provides host-side parsing, scoped token exchange,
 and restricted transport primitives. These primitives do not authenticate a
