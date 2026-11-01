@@ -42,6 +42,36 @@ func TestRenderConfig(t *testing.T) {
 	}
 }
 
+func TestRenderConfigSupportsLoopbackIPv6AndUDP(t *testing.T) {
+	cfg := renderConfig(policy.Policy{
+		Revision:  3,
+		SandboxID: "dev6",
+		Ports: []policy.Port{
+			{Host: 8080, Guest: 3000, Proto: "tcp", HostIP: "::1"},
+			{Host: 8081, Guest: 3001, Proto: "udp", HostIP: "127.0.0.1"},
+		},
+	}, "")
+	for _, want := range []string{`"[::1]:8080": "192.168.127.3:3000"`, `"udp:127.0.0.1:8081": "192.168.127.3:3001"`} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("missing %q in config:\n%s", want, cfg)
+		}
+	}
+}
+
+func TestDesiredForwardsKeysIncludeHostIP(t *testing.T) {
+	forwards := desiredForwards([]policy.Port{
+		{Host: 8080, Guest: 3000, Proto: "tcp"},
+		{Host: 8080, Guest: 3001, Proto: "tcp", HostIP: "::1"},
+		{Host: 8080, Guest: 3002, Proto: "udp", HostIP: "::1"},
+	})
+	if len(forwards) != 3 {
+		t.Fatalf("forwards=%+v", forwards)
+	}
+	if forwards["tcp|127.0.0.1:8080"].Remote != "192.168.127.3:3000" || forwards["tcp|[::1]:8080"].Remote != "192.168.127.3:3001" || forwards["udp|[::1]:8080"].Remote != "192.168.127.3:3002" {
+		t.Fatalf("forwards=%+v", forwards)
+	}
+}
+
 func TestStartDoesNotRemoveExistingSocketPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dev.sock")
