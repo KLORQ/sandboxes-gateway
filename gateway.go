@@ -38,6 +38,9 @@ type Config struct {
 	Supervisor  string
 	RunDir      string
 	DNSUpstream string
+	// OnExit is called with the sandbox name when a running gateway exits
+	// unexpectedly. It runs without the manager lock held.
+	OnExit func(name string)
 }
 
 // Network describes the host-side network attachment.
@@ -59,6 +62,9 @@ type process struct {
 	apiSocket string
 	revision  int
 	lease     *os.File
+	// stopping marks an orderly stop so the exit watcher does not report a
+	// host-initiated shutdown as an unexpected gateway loss.
+	stopping bool
 }
 
 // Manager owns gateway processes by sandbox name.
@@ -110,12 +116,12 @@ func (m *Manager) Start(ctx context.Context, p policy.Policy) (Network, error) {
 	if err := shortSocket(socket); err != nil {
 		return Network{}, err
 	}
+	apiSocket := filepath.Join(m.cfg.RunDir, name+".api.sock")
 	if err := ensureSocketPathAvailable(socket); err != nil {
 		return Network{}, err
 	}
 	cfgPath := filepath.Join(m.cfg.RunDir, name+".yaml")
 	logPath := filepath.Join(m.cfg.RunDir, name+".gateway.log")
-	apiSocket := filepath.Join(m.cfg.RunDir, name+".api.sock")
 	if err := shortSocket(apiSocket); err != nil {
 		return Network{}, err
 	}
@@ -209,6 +215,7 @@ func (m *Manager) launch(ctx context.Context, p policy.Policy, socket, cfgPath, 
 			}
 			m.procs[name] = proc
 			m.mu.Unlock()
+			go m.watch(name, proc, done)
 			mac := MAC(name)
 			return Network{
 				SocketPath: socket,
@@ -264,18 +271,110 @@ func validSandboxID(id string) bool {
 	return true
 }
 
+func (m *Manager) markStopping(name string, p process) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, ok := m.procs[name]; ok && current.cmd == p.cmd {
+		current.stopping = true
+		m.procs[name] = current
+	}
+}
+
+// watch forgets a gateway that exited after startup and reports the loss. A
+// gateway restart cannot reuse the guest's unixgram peer, so the sandbox must
+// be recreated instead of silently keeping a running VM without network.
+func (m *Manager) watch(name string, proc process, done <-chan struct{}) {
+	<-done
+	m.mu.Lock()
+	current, ok := m.procs[name]
+	unexpected := ok && current.cmd == proc.cmd && !current.stopping
+	if ok && current.cmd == proc.cmd {
+		delete(m.procs, name)
+	}
+	onExit := m.cfg.OnExit
+	m.mu.Unlock()
+	_ = m.removeOwnedSocket(proc.socket)
+	_ = m.removeOwnedSocket(proc.apiSocket)
+	if unexpected && onExit != nil {
+		onExit(name)
+	}
+}
+
+// removeOwnedSocket removes a leftover socket path only when it is a socket
+// directly inside the configured run directory. Anything else is left alone.
+func (m *Manager) removeOwnedSocket(path string) error {
+	if path == "" {
+		return nil
+	}
+	runDir, err := filepath.Abs(m.cfg.RunDir)
+	if err != nil {
+		return err
+	}
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if dir != runDir {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	return os.Remove(path)
+}
+
 // Stop terminates the sandbox gateway.
 func (m *Manager) Stop(ctx context.Context, name string) error {
 	m.mu.Lock()
 	p, ok := m.procs[name]
 	_, starting := m.starting[name]
 	m.mu.Unlock()
-	if starting {
+	switch {
+	case starting:
 		return errors.New("gateway is starting")
+	case !ok:
+		return m.clearStaleSockets(name)
 	}
-	if !ok {
-		return nil
+	if err := m.stopProcess(ctx, name, p); err != nil {
+		return err
 	}
+	if err := m.removeOwnedSocket(p.socket); err != nil {
+		return fmt.Errorf("remove gateway socket: %w", err)
+	}
+	if err := m.removeOwnedSocket(p.apiSocket); err != nil {
+		return fmt.Errorf("remove gateway services socket: %w", err)
+	}
+	if _, err := os.Lstat(p.socket); err == nil {
+		return errors.New("gateway exited but its socket path remains; ownership is unverified")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect gateway socket: %w", err)
+	}
+	return nil
+}
+
+// clearStaleSockets removes paths left by a gateway that died, or by a
+// previous daemon run. Without this they would block every later start.
+func (m *Manager) clearStaleSockets(name string) error {
+	for _, path := range []string{
+		filepath.Join(m.cfg.RunDir, name+".sock"),
+		filepath.Join(m.cfg.RunDir, name+".api.sock"),
+	} {
+		if err := m.removeOwnedSocket(path); err != nil {
+			return fmt.Errorf("remove stale gateway socket: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) stopProcess(ctx context.Context, name string, p process) error {
+	m.markStopping(name, p)
 	_ = p.lease.Close()
 	select {
 	case <-p.done:
@@ -293,11 +392,6 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		delete(m.procs, name)
 	}
 	m.mu.Unlock()
-	if _, err := os.Lstat(p.socket); err == nil {
-		return errors.New("gateway exited but its socket path remains; ownership is unverified")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect gateway socket: %w", err)
-	}
 	return nil
 }
 
