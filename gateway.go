@@ -432,6 +432,9 @@ func writeConfig(path string, p policy.Policy, dnsUpstream string) error {
 	if err := validatePolicy(p); err != nil {
 		return err
 	}
+	if err := validateDomainUpstream(p, dnsUpstream); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -486,21 +489,70 @@ func validatePolicy(p policy.Policy) error {
 
 func validatePolicyRules(rules []policy.Rule, name string) error {
 	for i, rule := range rules {
-		if rule.Domain != "" {
-			return fmt.Errorf("%s rule %d: domain policies are unsupported by the configured gateway", name, i)
-		}
-		if rule.CIDR == "" {
-			return fmt.Errorf("%s rule %d: cidr is required", name, i)
-		}
-		if _, _, err := net.ParseCIDR(rule.CIDR); err != nil {
-			return fmt.Errorf("%s rule %d: invalid cidr %q: %w", name, i, rule.CIDR, err)
-		}
 		protocol := strings.ToLower(strings.TrimSpace(rule.Protocol))
 		if protocol != protocolTCP && protocol != protocolUDP {
 			return fmt.Errorf("%s rule %d: protocol must be tcp or udp", name, i)
 		}
+		switch {
+		case rule.Domain != "" && rule.CIDR != "":
+			return fmt.Errorf("%s rule %d: domain and cidr are mutually exclusive", name, i)
+		case rule.Domain != "":
+			if !validDomainRule(rule.Domain) {
+				return fmt.Errorf("%s rule %d: invalid domain %q", name, i, rule.Domain)
+			}
+		case rule.CIDR == "":
+			return fmt.Errorf("%s rule %d: cidr or domain is required", name, i)
+		default:
+			if _, _, err := net.ParseCIDR(rule.CIDR); err != nil {
+				return fmt.Errorf("%s rule %d: invalid cidr %q: %w", name, i, rule.CIDR, err)
+			}
+		}
 	}
 	return nil
+}
+
+func validateDomainUpstream(p policy.Policy, dnsUpstream string) error {
+	if dnsUpstream != "" {
+		return nil
+	}
+	for _, rules := range [][]policy.Rule{p.Allow, p.Deny} {
+		for _, rule := range rules {
+			if rule.Domain != "" {
+				return errors.New("domain policy requires a DNS upstream (--dns-upstream or settings dns.upstream)")
+			}
+		}
+	}
+	return nil
+}
+
+//nolint:gocyclo,cyclop // a compact domain grammar validator.
+func validDomainRule(pattern string) bool {
+	pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+	if pattern == "" || len(pattern) > 253 || strings.ContainsAny(pattern, "\\ ") {
+		return false
+	}
+	base := pattern
+	switch {
+	case strings.HasPrefix(base, "**."):
+		base = strings.TrimPrefix(base, "**.")
+	case strings.HasPrefix(base, "*."):
+		base = strings.TrimPrefix(base, "*.")
+	}
+	if base == "" || strings.Contains(base, "*") {
+		return false
+	}
+	for _, label := range strings.Split(base, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '?' || r == '[' || r == ']' || r == '!' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func validatePolicyPorts(ports []policy.Port) error {
@@ -577,6 +629,9 @@ func writeRules(b *strings.Builder, name string, rules []policy.Rule) {
 		fmt.Fprintf(b, "      - protocol: %s\n", strconv.Quote(proto))
 		if r.CIDR != "" {
 			fmt.Fprintf(b, "        cidr: %s\n", strconv.Quote(r.CIDR))
+		}
+		if r.Domain != "" {
+			fmt.Fprintf(b, "        domain: %s\n", strconv.Quote(r.Domain))
 		}
 		if r.Port != 0 {
 			fmt.Fprintf(b, "        port: %d\n", r.Port)
