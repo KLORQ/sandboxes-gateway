@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KLORQ/sandboxes-gateway/policy"
+	"github.com/QUOINER/sandboxes-gateway/policy"
 )
 
 // TestLiveGatewayLifecycle requires an explicitly supplied patched gvproxy.
