@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/QUOINER/sandboxes-gateway/internal/version"
+	"github.com/quoiner/sandboxes-gateway/internal/version"
 )
 
 func main() {

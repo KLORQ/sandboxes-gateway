@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QUOINER/sandboxes-gateway/policy"
+	"github.com/quoiner/sandboxes-gateway/policy"
 )
 
 const (

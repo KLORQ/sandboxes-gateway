@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QUOINER/sandboxes-gateway/policy"
+	"github.com/quoiner/sandboxes-gateway/policy"
 )
 
 func TestRenderConfig(t *testing.T) {
