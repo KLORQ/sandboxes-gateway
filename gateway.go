@@ -32,6 +32,10 @@ const (
 	gatewayIP   = "192.168.127.1"
 )
 
+// ErrWindowsTransportUnavailable reports that the Windows guest-to-host
+// network transport has not passed its runtime security and parity gates.
+var ErrWindowsTransportUnavailable = errors.New("windows gateway transport is not available; refusing to start without the WHP/vsock adapter")
+
 // Config controls the gateway process manager.
 type Config struct {
 	GVProxy     string
@@ -89,6 +93,9 @@ func New(cfg Config) (*Manager, error) {
 
 // Start launches a default-deny gateway for one sandbox.
 func (m *Manager) Start(ctx context.Context, p policy.Policy) (Network, error) {
+	if err := checkGatewayPlatform(); err != nil {
+		return Network{}, err
+	}
 	if !validSandboxID(p.SandboxID) {
 		return Network{}, fmt.Errorf("invalid sandbox id")
 	}
@@ -183,7 +190,7 @@ func (m *Manager) launch(ctx context.Context, p policy.Policy, socket, cfgPath, 
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.ExtraFiles = []*os.File{leaseRead}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	configureGatewayProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = leaseRead.Close()
 		_ = leaseWrite.Close()
@@ -550,24 +557,6 @@ func writeConfig(path string, p policy.Policy, dnsUpstream string) error {
 		return fmt.Errorf("write gateway config: %w", err)
 	}
 	return nil
-}
-
-func openManagedFile(path string, flags int) (*os.File, error) {
-	file, err := os.OpenFile(path, flags|syscall.O_NOFOLLOW, 0o600) // #nosec G304 -- managed run dir; no-follow and descriptor checks reject links
-	if err != nil {
-		return nil, fmt.Errorf("open gateway file: %w", err)
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("inspect gateway file: %w", err)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !ok || stat.Nlink != 1 {
-		_ = file.Close()
-		return nil, errors.New("gateway file must be private, regular, and have one link")
-	}
-	return file, nil
 }
 
 // validatePolicy rejects rule forms the configured gvproxy policy engine
