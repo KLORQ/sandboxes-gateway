@@ -72,11 +72,7 @@ func openManagedFile(path string, flags int) (*os.File, error) {
 }
 
 func currentGatewaySID() (string, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return "", fmt.Errorf("open current process token: %w", err)
-	}
-	defer func() { _ = token.Close() }()
+	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
 	if err != nil {
 		return "", fmt.Errorf("read current user SID: %w", err)
@@ -95,12 +91,10 @@ func gatewayDACLIsPrivate(descriptor *windows.SECURITY_DESCRIPTOR, sid string) b
 	}
 	seenUser, seenSystem := false, false
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
-		var ace *windows.ACCESS_ALLOWED_ACE
-		if err := windows.GetAce(dacl, i, &ace); err != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
-			ace.Header.AceFlags != 0 || ace.Mask != 0x001f01ff {
+		aceSID, ok := gatewayACEPrincipal(dacl, i)
+		if !ok {
 			return false
 		}
-		aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
 		switch aceSID {
 		case sid:
 			seenUser = true
@@ -111,4 +105,14 @@ func gatewayDACLIsPrivate(descriptor *windows.SECURITY_DESCRIPTOR, sid string) b
 		}
 	}
 	return seenUser && seenSystem
+}
+
+func gatewayACEPrincipal(dacl *windows.ACL, index uint32) (string, bool) {
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, index, &ace); err != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
+		ace.Header.AceFlags != 0 || ace.Mask != 0x001f01ff {
+		return "", false
+	}
+	// #nosec G103 -- SidStart is the SID's first DWORD in the Win32 ACCESS_ALLOWED_ACE layout.
+	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String(), true
 }
