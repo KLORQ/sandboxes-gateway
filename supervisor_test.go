@@ -8,7 +8,7 @@ import (
 )
 
 func TestSupervisorHelper(t *testing.T) {
-	if os.Getenv("KLORQ_SUPERVISOR_HELPER") != "1" {
+	if os.Getenv("RHEIC_SUPERVISOR_HELPER") != "1" {
 		return
 	}
 	_ = RunSupervisor([]string{"/bin/sleep", "60"})
@@ -21,7 +21,7 @@ func TestSupervisorExitsWhenOwnerLeaseCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSupervisorHelper$")
-	cmd.Env = append(os.Environ(), "KLORQ_SUPERVISOR_HELPER=1")
+	cmd.Env = append(os.Environ(), "RHEIC_SUPERVISOR_HELPER=1")
 	cmd.ExtraFiles = []*os.File{read}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

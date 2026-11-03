@@ -14,21 +14,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lickren/sandboxes-gateway/policy"
+	"github.com/rheic/sandboxes-gateway/policy"
 )
 
 // TestLiveGatewayLifecycle requires an explicitly supplied patched gvproxy.
 // It starts no VM and creates only an isolated, uniquely named gateway.
 func TestLiveGatewayLifecycle(t *testing.T) {
-	binary := os.Getenv("KLORQ_TEST_GVPROXY")
+	binary := os.Getenv("RHEIC_TEST_GVPROXY")
 	if binary == "" {
-		t.Skip("set KLORQ_TEST_GVPROXY to a patched gvproxy for the local integration test")
+		t.Skip("set RHEIC_TEST_GVPROXY to a patched gvproxy for the local integration test")
 	}
-	supervisor := os.Getenv("KLORQ_TEST_SUPERVISOR")
+	supervisor := os.Getenv("RHEIC_TEST_SUPERVISOR")
 	if supervisor == "" {
-		t.Skip("set KLORQ_TEST_SUPERVISOR to a daemon binary")
+		t.Skip("set RHEIC_TEST_SUPERVISOR to a daemon binary")
 	}
-	dir, err := os.MkdirTemp("/tmp", "lsbx-gw-")
+	dir, err := os.MkdirTemp("/tmp", "rsbx-gw-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +115,11 @@ func TestLiveGatewayLifecycle(t *testing.T) {
 }
 
 func TestLiveGatewayDomainReload(t *testing.T) {
-	binary, supervisor := os.Getenv("KLORQ_TEST_GVPROXY"), os.Getenv("KLORQ_TEST_SUPERVISOR")
+	binary, supervisor := os.Getenv("RHEIC_TEST_GVPROXY"), os.Getenv("RHEIC_TEST_SUPERVISOR")
 	if binary == "" || supervisor == "" {
 		t.Skip("requires patched gvproxy and gateway supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "lsbx-gwd-")
+	dir, err := os.MkdirTemp("/tmp", "rsbx-gwd-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +151,11 @@ func TestLiveGatewayDomainReload(t *testing.T) {
 }
 
 func TestLiveGatewayOwnerHelper(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_OWNER_HELPER") != "1" {
+	if os.Getenv("RHEIC_TEST_OWNER_HELPER") != "1" {
 		return
 	}
-	dir := os.Getenv("KLORQ_TEST_OWNER_DIR")
-	manager, err := New(Config{GVProxy: os.Getenv("KLORQ_TEST_GVPROXY"), Supervisor: os.Getenv("KLORQ_TEST_SUPERVISOR"), RunDir: dir})
+	dir := os.Getenv("RHEIC_TEST_OWNER_DIR")
+	manager, err := New(Config{GVProxy: os.Getenv("RHEIC_TEST_GVPROXY"), Supervisor: os.Getenv("RHEIC_TEST_SUPERVISOR"), RunDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,16 +169,16 @@ func TestLiveGatewayOwnerHelper(t *testing.T) {
 }
 
 func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
+	if os.Getenv("RHEIC_TEST_GVPROXY") == "" || os.Getenv("RHEIC_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "lsbx-owner-")
+	dir, err := os.MkdirTemp("/tmp", "rsbx-owner-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveGatewayOwnerHelper$")
-	cmd.Env = append(os.Environ(), "KLORQ_TEST_OWNER_HELPER=1", "KLORQ_TEST_OWNER_DIR="+dir)
+	cmd.Env = append(os.Environ(), "RHEIC_TEST_OWNER_HELPER=1", "RHEIC_TEST_OWNER_DIR="+dir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -217,16 +217,16 @@ func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
 }
 
 func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
+	if os.Getenv("RHEIC_TEST_GVPROXY") == "" || os.Getenv("RHEIC_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "lsbx-supervisor-")
+	dir, err := os.MkdirTemp("/tmp", "rsbx-supervisor-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveGatewayOwnerHelper$")
-	cmd.Env = append(os.Environ(), "KLORQ_TEST_OWNER_HELPER=1", "KLORQ_TEST_OWNER_DIR="+dir)
+	cmd.Env = append(os.Environ(), "RHEIC_TEST_OWNER_HELPER=1", "RHEIC_TEST_OWNER_DIR="+dir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -269,11 +269,11 @@ func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
 }
 
 func TestLiveGatewayRejectsBinaryWithoutOwnerLease(t *testing.T) {
-	binary, supervisor := os.Getenv("KLORQ_TEST_OLD_GVPROXY"), os.Getenv("KLORQ_TEST_SUPERVISOR")
+	binary, supervisor := os.Getenv("RHEIC_TEST_OLD_GVPROXY"), os.Getenv("RHEIC_TEST_SUPERVISOR")
 	if binary == "" || supervisor == "" {
 		t.Skip("requires old gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "lsbx-old-gateway-")
+	dir, err := os.MkdirTemp("/tmp", "rsbx-old-gateway-")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-module github.com/lickren/sandboxes-gateway
+module github.com/rheic/sandboxes-gateway
 
 go 1.27
 
