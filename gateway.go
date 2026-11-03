@@ -347,10 +347,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if err := removeManagedGatewaySecret(p.tokenPath); err != nil {
 		return fmt.Errorf("remove gateway API token: %w", err)
 	}
-	if err := verifyGatewayEndpointStopped(p.socket); err != nil {
-		return err
-	}
-	return nil
+	return verifyGatewayEndpointStopped(p.socket)
 }
 
 // clearStaleSockets removes paths left by a gateway that died, or by a
@@ -708,7 +705,7 @@ func writeRules(b *strings.Builder, name string, rules []policy.Rule) {
 	for _, r := range rules {
 		proto := r.Protocol
 		if proto == "" {
-			proto = "tcp"
+			proto = protocolTCP
 		}
 		fmt.Fprintf(b, "      - protocol: %s\n", strconv.Quote(proto))
 		if r.ID != "" {
@@ -799,10 +796,6 @@ func portLocal(port policy.Port) string {
 	return net.JoinHostPort(hostIP, strconv.Itoa(int(port.Host)))
 }
 
-func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, desired map[string]forwardAPI) error {
-	return applyForwardDiffAuth(ctx, socket, "", current, desired)
-}
-
 func applyForwardDiffAuth(ctx context.Context, socket, token string, current []forwardAPI, desired map[string]forwardAPI) error {
 	currentSet := make(map[string]struct{}, len(current))
 	for _, forward := range current {
@@ -868,10 +861,6 @@ func listForwardsAuth(ctx context.Context, endpoint, token string) ([]forwardAPI
 	return forwards, nil
 }
 
-func postForward(ctx context.Context, socket, endpoint string, payload forwardAPI) error {
-	return postForwardAuth(ctx, socket, "", endpoint, payload)
-}
-
 func postForwardAuth(ctx context.Context, gatewayEndpoint, token, endpoint string, payload forwardAPI) error {
 	if err := validateGatewayAPIAuth(gatewayEndpoint, token); err != nil {
 		return err
@@ -902,14 +891,6 @@ func postForwardAuth(ctx context.Context, gatewayEndpoint, token, endpoint strin
 		return fmt.Errorf("gateway forward API: status %d: %s", resp.StatusCode, strings.TrimSpace(string(message)))
 	}
 	return nil
-}
-
-func unixHTTPClient(socket string) *http.Client {
-	client, err := gatewayHTTPClient(socket)
-	if err != nil {
-		return &http.Client{Timeout: time.Second}
-	}
-	return client
 }
 
 func gatewayHTTPClient(endpoint string) (*http.Client, error) {

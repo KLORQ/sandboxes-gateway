@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,15 +105,6 @@ func validateGatewayAPIAuth(endpoint, token string) error {
 		return errors.New("gateway TCP API requires bearer authentication")
 	}
 	return nil
-}
-
-func gatewayTCPReady(endpoint string) bool {
-	conn, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "tcp://"))
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 func configureGatewayProcess(cmd *exec.Cmd) {
