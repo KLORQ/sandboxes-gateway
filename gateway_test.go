@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KLORQ/sandboxes-gateway/policy"
+	"github.com/quoiner/sandboxes-gateway/policy"
 )
 
 func TestRenderConfig(t *testing.T) {

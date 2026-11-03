@@ -1,3 +1,3 @@
-module github.com/KLORQ/sandboxes-gateway
+module github.com/quoiner/sandboxes-gateway
 
 go 1.27

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/KLORQ/sandboxes-gateway/internal/version"
+	"github.com/quoiner/sandboxes-gateway/internal/version"
 )
 
 func main() {
