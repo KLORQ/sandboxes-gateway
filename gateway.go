@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	pathpkg "path"
@@ -18,10 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/quoiner/sandboxes-gateway/policy"
+	"github.com/lickren/sandboxes-gateway/policy"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 
 // ErrWindowsTransportUnavailable reports that the Windows guest-to-host
 // network transport has not passed its runtime security and parity gates.
-var ErrWindowsTransportUnavailable = errors.New("windows gateway transport is not available; refusing to start without the WHP/vsock adapter")
+var ErrWindowsTransportUnavailable = errors.New("windows gateway transport is unavailable; QEMU network attachment has no access-controlled host endpoint")
 
 // Config controls the gateway process manager.
 type Config struct {
@@ -49,12 +49,13 @@ type Config struct {
 
 // Network describes the host-side network attachment.
 type Network struct {
-	SocketPath  string
-	MAC         string
-	DeviceIP    string
-	GatewayIP   string
-	AuditPath   string
-	Annotations []string
+	SocketPath   string
+	QEMUEndpoint string
+	MAC          string
+	DeviceIP     string
+	GatewayIP    string
+	AuditPath    string
+	Annotations  []string
 }
 
 type process struct {
@@ -64,8 +65,10 @@ type process struct {
 	cfgPath   string
 	logPath   string
 	apiSocket string
+	apiToken  string
+	tokenPath string
 	revision  int
-	lease     *os.File
+	lease     io.Closer
 	// stopping marks an orderly stop so the exit watcher does not report a
 	// host-initiated shutdown as an unexpected gateway loss.
 	stopping bool
@@ -119,23 +122,19 @@ func (m *Manager) Start(ctx context.Context, p policy.Policy) (Network, error) {
 	if err := os.MkdirAll(m.cfg.RunDir, 0o700); err != nil {
 		return Network{}, err
 	}
-	socket := filepath.Join(m.cfg.RunDir, name+".sock")
-	if err := shortSocket(socket); err != nil {
+	socket, apiSocket, tokenPath, err := gatewayEndpoints(m.cfg.RunDir, name)
+	if err != nil {
 		return Network{}, err
 	}
-	apiSocket := filepath.Join(m.cfg.RunDir, name+".api.sock")
-	if err := ensureSocketPathAvailable(socket); err != nil {
+	if err := ensureGatewayEndpointAvailable(socket); err != nil {
 		return Network{}, err
 	}
 	cfgPath := filepath.Join(m.cfg.RunDir, name+".yaml")
 	logPath := filepath.Join(m.cfg.RunDir, name+".gateway.log")
-	if err := shortSocket(apiSocket); err != nil {
+	if err := ensureGatewayEndpointAvailable(apiSocket); err != nil {
 		return Network{}, err
 	}
-	if err := ensureSocketPathAvailable(apiSocket); err != nil {
-		return Network{}, err
-	}
-	return m.launch(ctx, p, socket, cfgPath, logPath, apiSocket)
+	return m.launch(ctx, p, socket, cfgPath, logPath, apiSocket, tokenPath)
 }
 
 func (m *Manager) reserveStart(name string) error {
@@ -162,59 +161,41 @@ func ensureSocketPathAvailable(socket string) error {
 	return nil
 }
 
-func (m *Manager) launch(ctx context.Context, p policy.Policy, socket, cfgPath, logPath, apiSocket string) (Network, error) {
+func (m *Manager) launch(ctx context.Context, p policy.Policy, socket, cfgPath, logPath, apiSocket, tokenPath string) (Network, error) {
 	name := p.SandboxID
-	if m.cfg.Supervisor == "" {
-		return Network{}, errors.New("gateway supervisor is required")
-	}
 	if err := writeConfig(cfgPath, p, m.cfg.DNSUpstream); err != nil {
+		return Network{}, err
+	}
+	apiToken, err := createGatewayAPIToken(tokenPath)
+	if err != nil {
 		return Network{}, err
 	}
 	logFile, err := openManagedFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
-		return Network{}, err
+		return Network{}, errors.Join(err, removeManagedGatewaySecret(tokenPath))
 	}
-	leaseRead, leaseWrite, err := os.Pipe()
+	cmd, lease, err := startManagedGateway(m.cfg.Supervisor, m.cfg.GVProxy, cfgPath, socket, apiSocket, tokenPath, logFile)
 	if err != nil {
 		_ = logFile.Close()
-		return Network{}, fmt.Errorf("create gateway owner lease: %w", err)
+		return Network{}, errors.Join(err, removeManagedGatewaySecret(tokenPath))
 	}
-	cmd := exec.Command(m.cfg.Supervisor, // #nosec G204 -- supervisor and gvproxy are operator-configured local binaries
-		SupervisorArgument, m.cfg.GVProxy,
-		"-config", cfgPath,
-		"-require-egress-policy",
-		"-require-owner-lease",
-		"-listen-vfkit", "unixgram://"+socket,
-		"-services", "unix://"+apiSocket,
-	)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.ExtraFiles = []*os.File{leaseRead}
-	configureGatewayProcess(cmd)
-	if err := cmd.Start(); err != nil {
-		_ = leaseRead.Close()
-		_ = leaseWrite.Close()
-		_ = logFile.Close()
-		return Network{}, fmt.Errorf("start gateway: %w", err)
-	}
-	_ = leaseRead.Close()
 	_ = logFile.Close()
 	done := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
-		_ = leaseWrite.Close()
+		_ = lease.Close()
 		close(done)
 	}()
-	proc := process{cmd: cmd, done: done, socket: socket, cfgPath: cfgPath, logPath: logPath, apiSocket: apiSocket, revision: p.Revision, lease: leaseWrite}
+	proc := process{cmd: cmd, done: done, socket: socket, cfgPath: cfgPath, logPath: logPath, apiSocket: apiSocket, apiToken: apiToken, tokenPath: tokenPath, revision: p.Revision, lease: lease}
 
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case <-done:
-			return Network{}, errors.New("gateway exited before becoming ready")
+			return Network{}, m.abortStart(name, proc, errors.New("gateway exited before becoming ready"))
 		default:
 		}
-		if info, err := os.Lstat(socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+		if gatewayEndpointReady(ctx, socket, apiSocket, apiToken, done) {
 			m.mu.Lock()
 			if m.closed {
 				m.mu.Unlock()
@@ -225,26 +206,24 @@ func (m *Manager) launch(ctx context.Context, p policy.Policy, socket, cfgPath, 
 			go m.watch(name, proc, done)
 			mac := MAC(name)
 			return Network{
-				SocketPath: socket,
-				MAC:        mac,
-				DeviceIP:   deviceIP,
-				GatewayIP:  gatewayIP,
-				AuditPath:  p.AuditPath,
-				Annotations: []string{
-					fmt.Sprintf("io.containerd.nerdbox.network.0=socket=%s,mode=unixgram,mac=%s,addr=%s/24", socket, mac, deviceIP),
-					fmt.Sprintf("io.containerd.nerdbox.ctr.network.0=vmmac=%s,addr=%s/24,gw=%s", mac, guestIP, gatewayIP),
-				},
+				SocketPath:   socket,
+				QEMUEndpoint: qemuNetworkEndpoint(socket),
+				MAC:          mac,
+				DeviceIP:     deviceIP,
+				GatewayIP:    gatewayIP,
+				AuditPath:    p.AuditPath,
+				Annotations:  gatewayNetworkAnnotations(socket, mac),
 			}, nil
 		}
 		select {
 		case <-ctx.Done():
 			return Network{}, m.abortStart(name, proc, ctx.Err())
 		case <-done:
-			return Network{}, fmt.Errorf("gateway exited before becoming ready")
+			return Network{}, m.abortStart(name, proc, errors.New("gateway exited before becoming ready"))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return Network{}, m.abortStart(name, proc, errors.New("gateway did not create socket"))
+	return Network{}, m.abortStart(name, proc, errors.New("gateway did not become ready"))
 }
 
 func (m *Manager) abortStart(name string, proc process, cause error) error {
@@ -259,6 +238,9 @@ func (m *Manager) abortStart(name string, proc process, cause error) error {
 		m.mu.Lock()
 		m.procs[name] = proc
 		m.mu.Unlock()
+		go m.watch(name, proc, proc.done)
+	} else {
+		cleanupErr = errors.Join(cleanupErr, m.removeOwnedSocket(proc.socket), m.removeOwnedSocket(proc.apiSocket), removeManagedGatewaySecret(proc.tokenPath))
 	}
 	return errors.Join(cause, cleanupErr)
 }
@@ -302,6 +284,7 @@ func (m *Manager) watch(name string, proc process, done <-chan struct{}) {
 	m.mu.Unlock()
 	_ = m.removeOwnedSocket(proc.socket)
 	_ = m.removeOwnedSocket(proc.apiSocket)
+	_ = removeManagedGatewaySecret(proc.tokenPath)
 	if unexpected && onExit != nil {
 		onExit(name)
 	}
@@ -311,6 +294,9 @@ func (m *Manager) watch(name string, proc process, done <-chan struct{}) {
 // directly inside the configured run directory. Anything else is left alone.
 func (m *Manager) removeOwnedSocket(path string) error {
 	if path == "" {
+		return nil
+	}
+	if strings.HasPrefix(path, "tcp://") {
 		return nil
 	}
 	runDir, err := filepath.Abs(m.cfg.RunDir)
@@ -358,10 +344,11 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if err := m.removeOwnedSocket(p.apiSocket); err != nil {
 		return fmt.Errorf("remove gateway services socket: %w", err)
 	}
-	if _, err := os.Lstat(p.socket); err == nil {
-		return errors.New("gateway exited but its socket path remains; ownership is unverified")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect gateway socket: %w", err)
+	if err := removeManagedGatewaySecret(p.tokenPath); err != nil {
+		return fmt.Errorf("remove gateway API token: %w", err)
+	}
+	if err := verifyGatewayEndpointStopped(p.socket); err != nil {
+		return err
 	}
 	return nil
 }
@@ -369,13 +356,13 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 // clearStaleSockets removes paths left by a gateway that died, or by a
 // previous daemon run. Without this they would block every later start.
 func (m *Manager) clearStaleSockets(name string) error {
-	for _, path := range []string{
-		filepath.Join(m.cfg.RunDir, name+".sock"),
-		filepath.Join(m.cfg.RunDir, name+".api.sock"),
-	} {
+	for _, path := range staleGatewayEndpoints(m.cfg.RunDir, name) {
 		if err := m.removeOwnedSocket(path); err != nil {
 			return fmt.Errorf("remove stale gateway socket: %w", err)
 		}
+	}
+	if err := removeManagedGatewaySecret(filepath.Join(m.cfg.RunDir, name+".api-token")); err != nil {
+		return fmt.Errorf("remove stale gateway API token: %w", err)
 	}
 	return nil
 }
@@ -405,9 +392,9 @@ func (m *Manager) stopProcess(ctx context.Context, name string, p process) error
 // ErrReloadUnverified reports that the current gvproxy has no revision ACK.
 var ErrReloadUnverified = errors.New("gateway policy reload has no verified acknowledgement")
 
-// Reload rewrites the gateway config, sends SIGHUP, and verifies the patched
-// gvproxy's appended revision acknowledgement. Without an acknowledgement the
-// gateway is stopped and the error fails closed.
+// Reload rewrites the gateway config, asks the platform control channel to
+// apply the policy, and verifies its revision acknowledgement. Without an
+// acknowledgement the gateway is stopped and the error fails closed.
 func (m *Manager) Reload(ctx context.Context, p policy.Policy) error {
 	if !validSandboxID(p.SandboxID) {
 		return fmt.Errorf("invalid sandbox id")
@@ -445,12 +432,9 @@ func (m *Manager) Reload(ctx context.Context, p policy.Policy) error {
 	if err != nil {
 		return err
 	}
-	if err := proc.cmd.Process.Signal(syscall.SIGHUP); err != nil {
-		return fmt.Errorf("signal gateway reload: %w", err)
-	}
 	ackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := waitForReloadAck(ackCtx, proc, offset, p.Revision); err != nil {
+	if err := reloadGateway(ackCtx, proc, p, offset); err != nil {
 		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		stopErr := m.Stop(stopCtx, p.SandboxID)
 		stopCancel()
@@ -767,17 +751,17 @@ func (m *Manager) SetPorts(ctx context.Context, name string, ports []policy.Port
 	if err := waitServicesAPI(ctx, proc); err != nil {
 		return err
 	}
-	current, err := listForwards(ctx, proc.apiSocket)
+	current, err := listForwardsAuth(ctx, proc.apiSocket, proc.apiToken)
 	if err != nil {
 		return err
 	}
-	return applyForwardDiff(ctx, proc.apiSocket, current, desiredForwards(ports))
+	return applyForwardDiffAuth(ctx, proc.apiSocket, proc.apiToken, current, desiredForwards(ports))
 }
 
 func waitServicesAPI(ctx context.Context, proc process) error {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, err := os.Stat(proc.apiSocket); err == nil {
+		if _, err := listForwardsAuth(ctx, proc.apiSocket, proc.apiToken); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -816,6 +800,10 @@ func portLocal(port policy.Port) string {
 }
 
 func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, desired map[string]forwardAPI) error {
+	return applyForwardDiffAuth(ctx, socket, "", current, desired)
+}
+
+func applyForwardDiffAuth(ctx context.Context, socket, token string, current []forwardAPI, desired map[string]forwardAPI) error {
 	currentSet := make(map[string]struct{}, len(current))
 	for _, forward := range current {
 		protocol := forward.Protocol
@@ -830,7 +818,7 @@ func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, 
 		if _, keep := desired[key]; keep {
 			continue
 		}
-		if err := postForward(ctx, socket, "/services/forwarder/unexpose", forwardAPI{Local: forward.Local, Protocol: protocol}); err != nil {
+		if err := postForwardAuth(ctx, socket, token, "/services/forwarder/unexpose", forwardAPI{Local: forward.Local, Protocol: protocol}); err != nil {
 			return err
 		}
 	}
@@ -838,7 +826,7 @@ func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, 
 		if _, exists := currentSet[key]; exists {
 			continue
 		}
-		if err := postForward(ctx, socket, "/services/forwarder/expose", forward); err != nil {
+		if err := postForwardAuth(ctx, socket, token, "/services/forwarder/expose", forward); err != nil {
 			return err
 		}
 	}
@@ -846,10 +834,23 @@ func applyForwardDiff(ctx context.Context, socket string, current []forwardAPI, 
 }
 
 func listForwards(ctx context.Context, socket string) ([]forwardAPI, error) {
-	client := unixHTTPClient(socket)
+	return listForwardsAuth(ctx, socket, "")
+}
+
+func listForwardsAuth(ctx context.Context, endpoint, token string) ([]forwardAPI, error) {
+	if err := validateGatewayAPIAuth(endpoint, token); err != nil {
+		return nil, err
+	}
+	client, err := gatewayHTTPClient(endpoint)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://gvproxy/services/forwarder/all", http.NoBody)
 	if err != nil {
 		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -868,6 +869,13 @@ func listForwards(ctx context.Context, socket string) ([]forwardAPI, error) {
 }
 
 func postForward(ctx context.Context, socket, endpoint string, payload forwardAPI) error {
+	return postForwardAuth(ctx, socket, "", endpoint, payload)
+}
+
+func postForwardAuth(ctx context.Context, gatewayEndpoint, token, endpoint string, payload forwardAPI) error {
+	if err := validateGatewayAPIAuth(gatewayEndpoint, token); err != nil {
+		return err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -877,7 +885,14 @@ func postForward(ctx context.Context, socket, endpoint string, payload forwardAP
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := unixHTTPClient(socket).Do(req)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client, err := gatewayHTTPClient(gatewayEndpoint)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("gateway forward API: %w", err)
 	}
@@ -890,12 +905,38 @@ func postForward(ctx context.Context, socket, endpoint string, payload forwardAP
 }
 
 func unixHTTPClient(socket string) *http.Client {
+	client, err := gatewayHTTPClient(socket)
+	if err != nil {
+		return &http.Client{Timeout: time.Second}
+	}
+	return client
+}
+
+func gatewayHTTPClient(endpoint string) (*http.Client, error) {
+	var dialNetwork, dialAddress string
+	switch {
+	case strings.HasPrefix(endpoint, "tcp://"):
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Scheme != "tcp" || u.Hostname() != "127.0.0.1" || u.User != nil || u.Opaque != "" {
+			return nil, errors.New("gateway TCP API must use IPv4 loopback")
+		}
+		port, err := strconv.ParseUint(u.Port(), 10, 16)
+		if err != nil || port == 0 || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return nil, errors.New("gateway TCP API endpoint is invalid")
+		}
+		dialNetwork, dialAddress = "tcp", net.JoinHostPort("127.0.0.1", strconv.FormatUint(port, 10))
+	default:
+		if endpoint == "" {
+			return nil, errors.New("gateway API endpoint is required")
+		}
+		dialNetwork, dialAddress = "unix", endpoint
+	}
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+				return (&net.Dialer{}).DialContext(ctx, dialNetwork, dialAddress)
 			},
 		},
 		Timeout: 5 * time.Second,
-	}
+	}, nil
 }

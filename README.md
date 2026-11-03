@@ -41,6 +41,13 @@ the owner-lease flag. Without either component gateway startup fails closed.
 The matching daemon entry point and gvproxy build patch must be deployed
 together; this module alone does not supply a runnable supervisor binary.
 
+Windows work adds a private bearer-token file for the TCP services API, a
+kill-on-close process Job Object, and policy reload over the authenticated
+services endpoint with an exact revision ACK. `Manager.Start` still fails
+closed on Windows: QEMU's network socket is TCP without endpoint
+authentication. A bearer token on the separate services API does not
+authenticate packet-channel clients.
+
 Current tests cover config rendering, MAC derivation, validation, and safe stop.
 An opt-in local test starts and stops a supplied patched gvproxy; it does not
 test a VM or establish policy enforcement. It is not part of CI.
