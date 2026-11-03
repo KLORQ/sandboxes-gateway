@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lickren/sandboxes-gateway/policy"
+	"github.com/rheic/sandboxes-gateway/policy"
 )
 
 func TestRenderConfig(t *testing.T) {

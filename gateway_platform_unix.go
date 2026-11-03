@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/lickren/sandboxes-gateway/policy"
+	"github.com/rheic/sandboxes-gateway/policy"
 )
 
 func checkGatewayPlatform() error { return nil }
