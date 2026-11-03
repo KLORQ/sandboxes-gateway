@@ -20,13 +20,13 @@ import (
 // TestLiveGatewayLifecycle requires an explicitly supplied patched gvproxy.
 // It starts no VM and creates only an isolated, uniquely named gateway.
 func TestLiveGatewayLifecycle(t *testing.T) {
-	binary := os.Getenv("KLORQ_TEST_GVPROXY")
+	binary := os.Getenv("LICKREN_TEST_GVPROXY")
 	if binary == "" {
-		t.Skip("set KLORQ_TEST_GVPROXY to a patched gvproxy for the local integration test")
+		t.Skip("set LICKREN_TEST_GVPROXY to a patched gvproxy for the local integration test")
 	}
-	supervisor := os.Getenv("KLORQ_TEST_SUPERVISOR")
+	supervisor := os.Getenv("LICKREN_TEST_SUPERVISOR")
 	if supervisor == "" {
-		t.Skip("set KLORQ_TEST_SUPERVISOR to a daemon binary")
+		t.Skip("set LICKREN_TEST_SUPERVISOR to a daemon binary")
 	}
 	dir, err := os.MkdirTemp("/tmp", "lsbx-gw-")
 	if err != nil {
@@ -115,7 +115,7 @@ func TestLiveGatewayLifecycle(t *testing.T) {
 }
 
 func TestLiveGatewayDomainReload(t *testing.T) {
-	binary, supervisor := os.Getenv("KLORQ_TEST_GVPROXY"), os.Getenv("KLORQ_TEST_SUPERVISOR")
+	binary, supervisor := os.Getenv("LICKREN_TEST_GVPROXY"), os.Getenv("LICKREN_TEST_SUPERVISOR")
 	if binary == "" || supervisor == "" {
 		t.Skip("requires patched gvproxy and gateway supervisor")
 	}
@@ -151,11 +151,11 @@ func TestLiveGatewayDomainReload(t *testing.T) {
 }
 
 func TestLiveGatewayOwnerHelper(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_OWNER_HELPER") != "1" {
+	if os.Getenv("LICKREN_TEST_OWNER_HELPER") != "1" {
 		return
 	}
-	dir := os.Getenv("KLORQ_TEST_OWNER_DIR")
-	manager, err := New(Config{GVProxy: os.Getenv("KLORQ_TEST_GVPROXY"), Supervisor: os.Getenv("KLORQ_TEST_SUPERVISOR"), RunDir: dir})
+	dir := os.Getenv("LICKREN_TEST_OWNER_DIR")
+	manager, err := New(Config{GVProxy: os.Getenv("LICKREN_TEST_GVPROXY"), Supervisor: os.Getenv("LICKREN_TEST_SUPERVISOR"), RunDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestLiveGatewayOwnerHelper(t *testing.T) {
 }
 
 func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
+	if os.Getenv("LICKREN_TEST_GVPROXY") == "" || os.Getenv("LICKREN_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
 	dir, err := os.MkdirTemp("/tmp", "lsbx-owner-")
@@ -178,7 +178,7 @@ func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveGatewayOwnerHelper$")
-	cmd.Env = append(os.Environ(), "KLORQ_TEST_OWNER_HELPER=1", "KLORQ_TEST_OWNER_DIR="+dir)
+	cmd.Env = append(os.Environ(), "LICKREN_TEST_OWNER_HELPER=1", "LICKREN_TEST_OWNER_DIR="+dir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
 }
 
 func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
-	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
+	if os.Getenv("LICKREN_TEST_GVPROXY") == "" || os.Getenv("LICKREN_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
 	dir, err := os.MkdirTemp("/tmp", "lsbx-supervisor-")
@@ -226,7 +226,7 @@ func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveGatewayOwnerHelper$")
-	cmd.Env = append(os.Environ(), "KLORQ_TEST_OWNER_HELPER=1", "KLORQ_TEST_OWNER_DIR="+dir)
+	cmd.Env = append(os.Environ(), "LICKREN_TEST_OWNER_HELPER=1", "LICKREN_TEST_OWNER_DIR="+dir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
 }
 
 func TestLiveGatewayRejectsBinaryWithoutOwnerLease(t *testing.T) {
-	binary, supervisor := os.Getenv("KLORQ_TEST_OLD_GVPROXY"), os.Getenv("KLORQ_TEST_SUPERVISOR")
+	binary, supervisor := os.Getenv("LICKREN_TEST_OLD_GVPROXY"), os.Getenv("LICKREN_TEST_SUPERVISOR")
 	if binary == "" || supervisor == "" {
 		t.Skip("requires old gvproxy and daemon supervisor")
 	}
