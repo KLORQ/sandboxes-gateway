@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/quoiner/sandboxes-gateway/policy"
+	"github.com/lickren/sandboxes-gateway/policy"
 )
 
 func TestWindowsGatewayStartFailsClosedBeforeCreatingResources(t *testing.T) {

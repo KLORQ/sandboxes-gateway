@@ -1,4 +1,4 @@
-module github.com/quoiner/sandboxes-gateway
+module github.com/lickren/sandboxes-gateway
 
 go 1.27
 

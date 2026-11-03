@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quoiner/sandboxes-gateway/policy"
+	"github.com/lickren/sandboxes-gateway/policy"
 )
 
 // TestLiveGatewayLifecycle requires an explicitly supplied patched gvproxy.
@@ -28,7 +28,7 @@ func TestLiveGatewayLifecycle(t *testing.T) {
 	if supervisor == "" {
 		t.Skip("set KLORQ_TEST_SUPERVISOR to a daemon binary")
 	}
-	dir, err := os.MkdirTemp("/tmp", "qsbx-gw-")
+	dir, err := os.MkdirTemp("/tmp", "lsbx-gw-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestLiveGatewayDomainReload(t *testing.T) {
 	if binary == "" || supervisor == "" {
 		t.Skip("requires patched gvproxy and gateway supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "qsbx-gwd-")
+	dir, err := os.MkdirTemp("/tmp", "lsbx-gwd-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestLiveGatewayStopsAfterOwnerKill(t *testing.T) {
 	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "qsbx-owner-")
+	dir, err := os.MkdirTemp("/tmp", "lsbx-owner-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestLiveGatewayStopsAfterSupervisorKill(t *testing.T) {
 	if os.Getenv("KLORQ_TEST_GVPROXY") == "" || os.Getenv("KLORQ_TEST_SUPERVISOR") == "" {
 		t.Skip("requires patched gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "qsbx-supervisor-")
+	dir, err := os.MkdirTemp("/tmp", "lsbx-supervisor-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestLiveGatewayRejectsBinaryWithoutOwnerLease(t *testing.T) {
 	if binary == "" || supervisor == "" {
 		t.Skip("requires old gvproxy and daemon supervisor")
 	}
-	dir, err := os.MkdirTemp("/tmp", "qsbx-old-gateway-")
+	dir, err := os.MkdirTemp("/tmp", "lsbx-old-gateway-")
 	if err != nil {
 		t.Fatal(err)
 	}
