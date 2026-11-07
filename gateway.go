@@ -36,6 +36,10 @@ const (
 // network transport has not passed its runtime security and parity gates.
 var ErrWindowsTransportUnavailable = errors.New("windows gateway transport is unavailable; QEMU network attachment has no access-controlled host endpoint")
 
+// errEndpointExists marks an endpoint path that is already present, allowing
+// the manager to attempt ownership-verified stale recovery before failing.
+var errEndpointExists = errors.New("gateway endpoint path already exists")
+
 // Config controls the gateway process manager.
 type Config struct {
 	GVProxy     string
@@ -126,15 +130,72 @@ func (m *Manager) Start(ctx context.Context, p policy.Policy) (Network, error) {
 	if err != nil {
 		return Network{}, err
 	}
-	if err := ensureGatewayEndpointAvailable(socket); err != nil {
+	if err := m.ensureEndpointAvailable(socket); err != nil {
 		return Network{}, err
 	}
 	cfgPath := filepath.Join(m.cfg.RunDir, name+".yaml")
 	logPath := filepath.Join(m.cfg.RunDir, name+".gateway.log")
-	if err := ensureGatewayEndpointAvailable(apiSocket); err != nil {
+	if err := m.ensureEndpointAvailable(apiSocket); err != nil {
 		return Network{}, err
 	}
 	return m.launch(ctx, p, socket, cfgPath, logPath, apiSocket, tokenPath)
+}
+
+// ensureEndpointAvailable rejects endpoints that are live or unowned. A stale
+// socket left by a crashed gateway is removed only after verifying that it is
+// a socket directly inside the run directory and that nothing is listening on
+// it; anything else fails closed and is left untouched.
+func (m *Manager) ensureEndpointAvailable(endpoint string) error {
+	err := ensureGatewayEndpointAvailable(endpoint)
+	if err == nil || !errors.Is(err, errEndpointExists) {
+		return err
+	}
+	if recoverErr := m.recoverStaleEndpoint(endpoint); recoverErr != nil {
+		return err
+	}
+	return ensureGatewayEndpointAvailable(endpoint)
+}
+
+// recoverStaleEndpoint removes an existing endpoint path only when it is a
+// stale socket owned by the run directory: no listener answers a bounded
+// dial. A live listener or a non-socket path is left untouched and reported.
+func (m *Manager) recoverStaleEndpoint(endpoint string) error {
+	if strings.HasPrefix(endpoint, "tcp://") {
+		return errors.New("tcp endpoint recovery is not supported")
+	}
+	if err := m.requireOwnedSocketPath(endpoint); err != nil {
+		return err
+	}
+	conn, dialErr := net.DialTimeout("unix", endpoint, 300*time.Millisecond)
+	if dialErr == nil {
+		_ = conn.Close()
+		return errors.New("gateway endpoint is live")
+	}
+	return m.removeOwnedSocket(endpoint)
+}
+
+// requireOwnedSocketPath verifies through Lstat that the path is a socket
+// directly inside the configured run directory, without following symlinks.
+func (m *Manager) requireOwnedSocketPath(path string) error {
+	runDir, err := filepath.Abs(m.cfg.RunDir)
+	if err != nil {
+		return err
+	}
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if dir != runDir {
+		return errors.New("endpoint is outside the gateway run directory")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("endpoint is not an owned socket")
+	}
+	return nil
 }
 
 func (m *Manager) reserveStart(name string) error {
@@ -154,7 +215,7 @@ func (m *Manager) reserveStart(name string) error {
 
 func ensureSocketPathAvailable(socket string) error {
 	if _, err := os.Lstat(socket); err == nil {
-		return errors.New("gateway socket path already exists")
+		return errEndpointExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect gateway socket: %w", err)
 	}
